@@ -51,14 +51,3 @@ fn displayMainBuffer(w: *std.io.Writer) !void {
     try w.print("{s}", .{main_buf_sequence});
     try w.flush();
 }
-
-fn getWinSize(f: *std.fs.File) !std.posix.winsize {
-    var winsize: std.c.winsize = undefined;
-    const fd = f.handle;
-    const rc = std.c.ioctl(fd, std.c.T.IOCGWINSZ, @intFromPtr(&winsize));
-    if (@as(isize, rc) < 0) {
-        return error.IoctIError; // handle error appropriately
-    }
-
-    return winsize;
-}
