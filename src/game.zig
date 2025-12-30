@@ -4,6 +4,8 @@ const Frame = frame.Frame;
 const getWinSize = frame.getWinSize;
 const initFrame = frame.initFrame;
 
+const MAX_ASTEROIDS = 50;
+
 pub fn startGameLoop() !void {
     const stdin_file = std.fs.File.stdin();
     var stdout_file = std.fs.File.stdout();
@@ -29,7 +31,7 @@ pub fn startGameLoop() !void {
         },
     };
 
-    var state = try initGameState(allocator, winsize.row * winsize.col);
+    var state = try initGameState(allocator, winsize);
     defer state.deinit(allocator);
 
     var frameA = try initFrame(allocator, winsize);
@@ -41,6 +43,8 @@ pub fn startGameLoop() !void {
 
     var curr_frame: *Frame = &frameA;
     var prev_frame: ?*Frame = null;
+
+    var asteroid_count: u16 = undefined;
 
     while (true) {
         if (try pollKey(stdin_file, fds[0..], 100)) |key| {
@@ -79,6 +83,31 @@ pub fn startGameLoop() !void {
             state.dirty_cells.add(player_pos.prev_x, player_pos.prev_y);
             // state.dirty_cells.add(player_pos.x, player_pos.y);
         }
+
+        for (state.asteroids.getPoses(), 0..) |*pos, i| {
+            pos.prev_x = pos.x;
+            pos.prev_y = pos.y;
+            state.dirty_cells.add(pos.prev_x, pos.prev_y);
+
+            if (pos.y >= winsize.row - 1) {
+                state.asteroids.removeAt(i);
+            } else {
+                pos.y += 1;
+            }
+        }
+
+        if (!state.asteroids.isFull()) {
+            asteroid_count = randomAsteroidCount();
+
+            while (asteroid_count > 0) {
+                // TODO don't show an asteroid in the same place
+                // TODO "pad" them a little bit so they don't get too close
+                const ast_pos = randomXCoordinate(winsize);
+                state.asteroids.add(ast_pos, 1);
+                asteroid_count -= 1;
+            }
+        }
+
         try renderContent(curr_frame, &state);
         try drawFrame(stdout, curr_frame, prev_frame);
 
@@ -105,6 +134,7 @@ fn pollKey(stdin: std.fs.File, fds: []std.posix.pollfd, timeout_ms: i32) !?u8 {
 fn renderContent(curr_frame: *Frame, game_state: *GameState) !void {
     const player_pos = game_state.player_pos;
     var dirty_cells = game_state.dirty_cells;
+    var asteroids = game_state.asteroids;
 
     for (dirty_cells.getCells()) |cell| {
         curr_frame.lines[cell.y][cell.x] = ' ';
@@ -112,17 +142,11 @@ fn renderContent(curr_frame: *Frame, game_state: *GameState) !void {
 
     dirty_cells.clear();
 
-    // if (player_pos.prev_y != player_pos.y or player_pos.prev_x != player_pos.x) {
-    //     curr_frame.lines[player_pos.prev_y][player_pos.prev_x] = ' ';
-    // }
-
     curr_frame.lines[player_pos.y][player_pos.x] = 'x';
 
-    // for (curr_frame.lines, 0..) |_, i| {
-    //     if (player_pos.y == i) {
-    //         _ = try std.fmt.bufPrint(curr_frame.lines[i][game_state.player_pos.x..], "{s}", .{"x"});
-    //      }
-    // }
+    for (asteroids.getPoses()) |pos| {
+        curr_frame.lines[pos.y][pos.x] = '#';
+    }
 }
 
 fn drawFrame(w: *std.io.Writer, curr_frame: *Frame, prev_frame: ?*Frame) !void {
@@ -161,10 +185,54 @@ const GameState = struct {
     const Self = @This();
 
     player_pos: Pos,
+    asteroids: Asteroids,
     dirty_cells: DirtyCells,
 
     pub fn deinit(self: *const Self, allocator: std.mem.Allocator) void {
         self.dirty_cells.deinit(allocator);
+        self.asteroids.deinit(allocator);
+    }
+};
+
+const Asteroids = struct {
+    const Self = @This();
+
+    poses: []Pos,
+    current_idx: usize,
+
+    pub fn deinit(self: *const Self, allocator: std.mem.Allocator) void {
+        allocator.free(self.poses);
+    }
+
+    pub fn add(self: *Self, x: u16, y: u16) void {
+        if (self.current_idx >= self.poses.len) {
+            // TODO implement "wrapping" in case buffer gets full
+            return;
+        }
+
+        self.poses[self.current_idx] = Pos{
+            .x = x,
+            .y = y,
+            .prev_x = x,
+            .prev_y = y,
+        };
+
+        self.current_idx += 1;
+    }
+
+    pub fn removeAt(self: *Self, idx: usize) void {
+        std.debug.assert(idx < self.current_idx);
+        const last_idx = self.current_idx - 1;
+        self.poses[idx] = self.poses[last_idx];
+        self.current_idx -= 1;
+    }
+
+    pub fn getPoses(self: *Self) []Pos {
+        return self.poses[0..self.current_idx];
+    }
+
+    pub fn isFull(self: *Self) bool {
+        return self.current_idx >= MAX_ASTEROIDS;
     }
 };
 
@@ -172,32 +240,32 @@ const DirtyCells = struct {
     const Self = @This();
 
     cells: []Cell,
-    pos: usize,
+    current_idx: usize,
 
     pub fn deinit(self: *const Self, allocator: std.mem.Allocator) void {
         allocator.free(self.cells);
     }
 
     pub fn getCells(self: *Self) []Cell {
-        return self.cells[0..self.pos];
+        return self.cells[0..self.current_idx];
     }
 
     pub fn add(self: *Self, x: u16, y: u16) void {
-        if (self.pos >= self.cells.len) {
+        if (self.current_idx >= self.cells.len) {
             // TODO implement "wrapping" in case buffer gets full
             return;
         }
 
-        self.cells[self.pos] = Cell{
+        self.cells[self.current_idx] = Cell{
             .x = x,
             .y = y,
         };
 
-        self.pos += 1;
+        self.current_idx += 1;
     }
 
     pub fn clear(self: *Self) void {
-        self.pos = 0;
+        self.current_idx = 0;
     }
 };
 
@@ -213,18 +281,37 @@ const Pos = struct {
     prev_y: u16,
 };
 
-fn initGameState(allocator: std.mem.Allocator, max_dirty_cells: u32) !GameState {
+fn initGameState(allocator: std.mem.Allocator, winsize: std.posix.winsize) !GameState {
+    const max_dirty_cells = winsize.row * winsize.col;
     const dirty_cells = try allocator.alloc(Cell, max_dirty_cells);
+    const asteroid_poses = try allocator.alloc(Pos, MAX_ASTEROIDS);
+
     return GameState{
         .player_pos = Pos{
-            .x = 0,
-            .y = 0,
+            .x = winsize.col / 2,
+            .y = winsize.row - 1,
             .prev_x = 0,
             .prev_y = 0,
         },
+        .asteroids = Asteroids{
+            .poses = asteroid_poses,
+            .current_idx = 0,
+        },
         .dirty_cells = DirtyCells{
             .cells = dirty_cells,
-            .pos = 0,
+            .current_idx = 0,
         },
     };
+}
+
+const seed: u64 = 12345;
+var prng = std.Random.DefaultPrng.init(seed);
+var random = prng.random();
+
+fn randomXCoordinate(winsize: std.posix.winsize) u16 {
+    return random.uintLessThan(u16, winsize.col);
+}
+
+fn randomAsteroidCount() u16 {
+    return random.uintLessThan(u16, 2);
 }
