@@ -50,65 +50,82 @@ pub fn startGameLoop() !void {
         if (try pollKey(stdin_file, fds[0..], 100)) |key| {
             if (key == 'q') break;
 
-            state.player_pos.prev_x = state.player_pos.x;
-            state.player_pos.prev_y = state.player_pos.y;
-            switch (key) {
-                'w' => {
-                    if (state.player_pos.y > 0) {
-                        state.player_pos.y -= 1;
-                    }
-                },
-                's' => {
-                    if (state.player_pos.y < winsize.row - 1) {
-                        state.player_pos.y += 1;
-                    }
-                },
-                'a' => {
-                    if (state.player_pos.x > 0) {
-                        state.player_pos.x -= 1;
-                    }
-                },
-                'd' => {
-                    if (state.player_pos.x < winsize.col - 1) {
-                        state.player_pos.x += 1;
-                    }
-                },
-                else => {},
-            }
-        }
-
-        const player_pos = state.player_pos;
-
-        if (player_pos.prev_y != player_pos.y or player_pos.prev_x != player_pos.x) {
-            state.dirty_cells.add(player_pos.prev_x, player_pos.prev_y);
-            // state.dirty_cells.add(player_pos.x, player_pos.y);
-        }
-
-        for (state.asteroids.getPoses(), 0..) |*pos, i| {
-            pos.prev_x = pos.x;
-            pos.prev_y = pos.y;
-            state.dirty_cells.add(pos.prev_x, pos.prev_y);
-
-            if (pos.y >= winsize.row - 1) {
-                state.asteroids.removeAt(i);
+            if (state.status == GameStatus.playing) {
+                state.player_pos.prev_x = state.player_pos.x;
+                state.player_pos.prev_y = state.player_pos.y;
+                switch (key) {
+                    'w' => {
+                        if (state.player_pos.y > 0) {
+                            state.player_pos.y -= 1;
+                        }
+                    },
+                    's' => {
+                        if (state.player_pos.y < winsize.row - 1) {
+                            state.player_pos.y += 1;
+                        }
+                    },
+                    'a' => {
+                        if (state.player_pos.x > 0) {
+                            state.player_pos.x -= 1;
+                        }
+                    },
+                    'd' => {
+                        if (state.player_pos.x < winsize.col - 1) {
+                            state.player_pos.x += 1;
+                        }
+                    },
+                    else => {},
+                }
             } else {
-                pos.y += 1;
+                switch (key) {
+                    'n' => {
+                        state.status = GameStatus.playing;
+                        continue;
+                    },
+                    else => {},
+                }
             }
         }
 
-        if (!state.asteroids.isFull()) {
-            asteroid_count = randomAsteroidCount();
+        if (state.status == GameStatus.playing) {
+            const player_pos = state.player_pos;
 
-            while (asteroid_count > 0) {
-                // TODO don't show an asteroid in the same place
-                // TODO "pad" them a little bit so they don't get too close
-                const ast_pos = randomXCoordinate(winsize);
-                state.asteroids.add(ast_pos, 1);
-                asteroid_count -= 1;
+            if (player_pos.prev_y != player_pos.y or player_pos.prev_x != player_pos.x) {
+                state.dirty_cells.add(player_pos.prev_x, player_pos.prev_y);
+            }
+
+            for (state.asteroids.getPoses(), 0..) |*pos, i| {
+                pos.prev_x = pos.x;
+                pos.prev_y = pos.y;
+                state.dirty_cells.add(pos.prev_x, pos.prev_y);
+
+                if (pos.y >= winsize.row - 1) {
+                    state.asteroids.removeAt(i);
+                } else {
+                    pos.y += 1;
+                }
+            }
+
+            if (!state.asteroids.isFull()) {
+                asteroid_count = randomAsteroidCount();
+
+                while (asteroid_count > 0) {
+                    // TODO don't show an asteroid in the same place
+                    // TODO "pad" them a little bit so they don't get too close
+                    const ast_pos = randomXCoordinate(winsize);
+                    state.asteroids.add(ast_pos, 1);
+                    asteroid_count -= 1;
+                }
+            }
+
+            for (state.asteroids.getPoses()) |pos| {
+                if (player_pos.x == pos.x and player_pos.y == pos.y) {
+                    // lose
+                }
             }
         }
 
-        try renderContent(curr_frame, &state);
+        try renderContent(curr_frame, &state, winsize);
         try drawFrame(stdout, curr_frame, prev_frame);
 
         prev_frame = curr_frame;
@@ -131,21 +148,49 @@ fn pollKey(stdin: std.fs.File, fds: []std.posix.pollfd, timeout_ms: i32) !?u8 {
     return null;
 }
 
-fn renderContent(curr_frame: *Frame, game_state: *GameState) !void {
-    const player_pos = game_state.player_pos;
+fn renderContent(curr_frame: *Frame, game_state: *GameState, winsize: std.posix.winsize) !void {
     var dirty_cells = game_state.dirty_cells;
-    var asteroids = game_state.asteroids;
-
     for (dirty_cells.getCells()) |cell| {
         curr_frame.lines[cell.y][cell.x] = ' ';
     }
 
     dirty_cells.clear();
 
-    curr_frame.lines[player_pos.y][player_pos.x] = 'x';
+    if (game_state.status == GameStatus.playing) {
+        const player_pos = game_state.player_pos;
+        var asteroids = game_state.asteroids;
 
-    for (asteroids.getPoses()) |pos| {
-        curr_frame.lines[pos.y][pos.x] = '#';
+        curr_frame.lines[player_pos.y][player_pos.x] = 'x';
+
+        for (asteroids.getPoses()) |pos| {
+            curr_frame.lines[pos.y][pos.x] = '#';
+        }
+    } else {
+        const msg = switch (game_state.status) {
+            .idle => "To start a new game press [n]",
+            .lost => "You lost!!! To start a new game press [n]",
+            else => "",
+        };
+
+        const center_row = winsize.row / 2;
+        const start_col = (winsize.col / 2) - (msg.len / 2);
+
+        for (msg, 0..) |char, i| {
+            // TODO the following casts are potentially not safe if the cast usize is greater than u16 can hold
+            const x: u16 = @intCast(start_col + i);
+            const y: u16 = @intCast(center_row);
+            curr_frame.lines[y][x] = char;
+            game_state.dirty_cells.add(x, y);
+        }
+    }
+}
+
+fn writeCenteredTextToFrame(f: *Frame, winsize: std.posix.winsize, msg: []const u8) void {
+    const center_row = winsize.row / 2;
+    const start_col = (winsize.col / 2) - (msg.len / 2);
+
+    for (msg, 0..) |char, i| {
+        f.lines[center_row][start_col + i] = char;
     }
 }
 
@@ -181,9 +226,12 @@ fn clearLine(writer: anytype) !void {
     try writer.writeAll("\x1b[2K");
 }
 
+const GameStatus = enum { idle, playing, lost, won };
+
 const GameState = struct {
     const Self = @This();
 
+    status: GameStatus,
     player_pos: Pos,
     asteroids: Asteroids,
     dirty_cells: DirtyCells,
@@ -287,6 +335,7 @@ fn initGameState(allocator: std.mem.Allocator, winsize: std.posix.winsize) !Game
     const asteroid_poses = try allocator.alloc(Pos, MAX_ASTEROIDS);
 
     return GameState{
+        .status = GameStatus.idle,
         .player_pos = Pos{
             .x = winsize.col / 2,
             .y = winsize.row - 1,
