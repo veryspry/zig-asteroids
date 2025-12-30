@@ -15,6 +15,10 @@ pub fn main() !void {
     const original_termios = try enableRawMode(stdin_fd);
     defer restoreMode(stdin_fd, original_termios);
 
+    // TODO hideCursor() and showCursor() aren't working properly
+    try hideCursor(stdout);
+    defer showCursor(stdout) catch {};
+
     try startGameLoop();
 }
 
@@ -49,5 +53,15 @@ fn displayAltBuffer(w: *std.io.Writer) !void {
 fn displayMainBuffer(w: *std.io.Writer) !void {
     const main_buf_sequence = "\x1B[?1049l";
     try w.print("{s}", .{main_buf_sequence});
+    try w.flush();
+}
+
+fn hideCursor(w: *std.io.Writer) !void {
+    try w.writeAll("\x1B[?25l");
+    try w.flush();
+}
+
+fn showCursor(w: *std.io.Writer) !void {
+    try w.writeAll("\x1b[?25h");
     try w.flush();
 }

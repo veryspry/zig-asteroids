@@ -29,7 +29,8 @@ pub fn startGameLoop() !void {
         },
     };
 
-    var state = initGameState();
+    var state = try initGameState(allocator, winsize.row * winsize.col);
+    defer state.deinit(allocator);
 
     var frameA = try initFrame(allocator, winsize);
     var frameB = try initFrame(allocator, winsize);
@@ -54,7 +55,7 @@ pub fn startGameLoop() !void {
                     }
                 },
                 's' => {
-                    if (state.player_pos.y < winsize.row) {
+                    if (state.player_pos.y < winsize.row - 1) {
                         state.player_pos.y += 1;
                     }
                 },
@@ -64,24 +65,21 @@ pub fn startGameLoop() !void {
                     }
                 },
                 'd' => {
-                    if (state.player_pos.x < winsize.col) {
+                    if (state.player_pos.x < winsize.col - 1) {
                         state.player_pos.x += 1;
                     }
                 },
                 else => {},
             }
-
-            // var buf: [32]u8 = undefined;
-            // const msg = try std.fmt.bufPrint(
-            //     &buf,
-            //     "key: {d} ('{c}')\r\n",
-            //     .{ key, key },
-            // );
-            // try stdout_file.writeAll(msg);
         }
 
-        try renderContent(curr_frame, &state);
+        const player_pos = state.player_pos;
 
+        if (player_pos.prev_y != player_pos.y or player_pos.prev_x != player_pos.x) {
+            state.dirty_cells.add(player_pos.prev_x, player_pos.prev_y);
+            // state.dirty_cells.add(player_pos.x, player_pos.y);
+        }
+        try renderContent(curr_frame, &state);
         try drawFrame(stdout, curr_frame, prev_frame);
 
         prev_frame = curr_frame;
@@ -106,10 +104,17 @@ fn pollKey(stdin: std.fs.File, fds: []std.posix.pollfd, timeout_ms: i32) !?u8 {
 
 fn renderContent(curr_frame: *Frame, game_state: *GameState) !void {
     const player_pos = game_state.player_pos;
+    var dirty_cells = game_state.dirty_cells;
 
-    if (player_pos.prev_y != player_pos.y or player_pos.prev_x != player_pos.x) {
-        curr_frame.lines[player_pos.prev_y][player_pos.prev_x] = ' ';
+    for (dirty_cells.getCells()) |cell| {
+        curr_frame.lines[cell.y][cell.x] = ' ';
     }
+
+    dirty_cells.clear();
+
+    // if (player_pos.prev_y != player_pos.y or player_pos.prev_x != player_pos.x) {
+    //     curr_frame.lines[player_pos.prev_y][player_pos.prev_x] = ' ';
+    // }
 
     curr_frame.lines[player_pos.y][player_pos.x] = 'x';
 
@@ -121,21 +126,24 @@ fn renderContent(curr_frame: *Frame, game_state: *GameState) !void {
 }
 
 fn drawFrame(w: *std.io.Writer, curr_frame: *Frame, prev_frame: ?*Frame) !void {
-    // todo take prev_frame and do diffing
     for (curr_frame.lines, 0..) |line, i| {
-        var changed = true;
+        for (line, 0..) |c, j| {
+            var changed = true;
 
-        if (prev_frame) |pf| {
-            changed = !std.mem.eql(u8, pf.lines[i], line);
-        }
+            if (prev_frame) |pf| {
+                changed = pf.lines[i][j] != c;
+            }
 
-        if (changed) {
-            try moveCursor(w, i + 1, 1);
-            try clearLine(w);
-            try w.writeAll(line);
-            try w.flush();
-            // reposition cursor to reset the auto wrap flag
-            try moveCursor(w, 1, 1);
+            if (changed) {
+                try moveCursor(w, i + 1, j + 1);
+                try w.writeByte(c);
+
+                // try clearLine(w);
+                // try w.writeAll(line);
+                try w.flush();
+                // reposition cursor to reset the auto wrap flag
+                try moveCursor(w, 1, 1);
+            }
         }
     }
 }
@@ -150,7 +158,52 @@ fn clearLine(writer: anytype) !void {
 }
 
 const GameState = struct {
+    const Self = @This();
+
     player_pos: Pos,
+    dirty_cells: DirtyCells,
+
+    pub fn deinit(self: *const Self, allocator: std.mem.Allocator) void {
+        self.dirty_cells.deinit(allocator);
+    }
+};
+
+const DirtyCells = struct {
+    const Self = @This();
+
+    cells: []Cell,
+    pos: usize,
+
+    pub fn deinit(self: *const Self, allocator: std.mem.Allocator) void {
+        allocator.free(self.cells);
+    }
+
+    pub fn getCells(self: *Self) []Cell {
+        return self.cells[0..self.pos];
+    }
+
+    pub fn add(self: *Self, x: u16, y: u16) void {
+        if (self.pos >= self.cells.len) {
+            // TODO implement "wrapping" in case buffer gets full
+            return;
+        }
+
+        self.cells[self.pos] = Cell{
+            .x = x,
+            .y = y,
+        };
+
+        self.pos += 1;
+    }
+
+    pub fn clear(self: *Self) void {
+        self.pos = 0;
+    }
+};
+
+const Cell = struct {
+    x: u16,
+    y: u16,
 };
 
 const Pos = struct {
@@ -160,13 +213,18 @@ const Pos = struct {
     prev_y: u16,
 };
 
-fn initGameState() GameState {
+fn initGameState(allocator: std.mem.Allocator, max_dirty_cells: u32) !GameState {
+    const dirty_cells = try allocator.alloc(Cell, max_dirty_cells);
     return GameState{
         .player_pos = Pos{
             .x = 0,
             .y = 0,
             .prev_x = 0,
             .prev_y = 0,
+        },
+        .dirty_cells = DirtyCells{
+            .cells = dirty_cells,
+            .pos = 0,
         },
     };
 }
