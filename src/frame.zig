@@ -13,6 +13,12 @@ pub const Frame = struct {
         }
         allocator.free(self.lines);
     }
+
+    pub fn clear(self: *Self) void {
+        for (self.lines) |line| {
+            @memset(line, ' ');
+        }
+    }
 };
 
 pub fn initFrame(allocator: std.mem.Allocator, winsize: std.posix.winsize) !Frame {

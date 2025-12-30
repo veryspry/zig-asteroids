@@ -79,6 +79,7 @@ pub fn startGameLoop() !void {
             } else {
                 switch (key) {
                     'n' => {
+                        state.reset(winsize);
                         state.status = GameStatus.playing;
                         continue;
                     },
@@ -120,7 +121,9 @@ pub fn startGameLoop() !void {
 
             for (state.asteroids.getPoses()) |pos| {
                 if (player_pos.x == pos.x and player_pos.y == pos.y) {
-                    // lose
+                    state.status = GameStatus.lost;
+
+                    break;
                 }
             }
         }
@@ -168,7 +171,7 @@ fn renderContent(curr_frame: *Frame, game_state: *GameState, winsize: std.posix.
     } else {
         const msg = switch (game_state.status) {
             .idle => "To start a new game press [n]",
-            .lost => "You lost!!! To start a new game press [n]",
+            .lost => "You lost!!! Press [n] to start a new game",
             else => "",
         };
 
@@ -240,6 +243,22 @@ const GameState = struct {
         self.dirty_cells.deinit(allocator);
         self.asteroids.deinit(allocator);
     }
+
+    pub fn reset(self: *Self, winsize: std.posix.winsize) void {
+        // NOTE: leave dirty cells as it will be used by the rendering / diffing engine to clear
+        // stale sprites
+        self.dirty_cells.add(self.player_pos.x, self.player_pos.y);
+
+        self.status = GameStatus.idle;
+        self.player_pos = Pos{
+            .x = winsize.col / 2,
+            .y = winsize.row - 1,
+            .prev_x = 0,
+            .prev_y = 0,
+        };
+
+        self.asteroids.clear();
+    }
 };
 
 const Asteroids = struct {
@@ -281,6 +300,11 @@ const Asteroids = struct {
 
     pub fn isFull(self: *Self) bool {
         return self.current_idx >= MAX_ASTEROIDS;
+    }
+
+    pub fn clear(self: *Self) void {
+        self.current_idx = 0;
+        @memset(self.poses[0..], undefined);
     }
 };
 
